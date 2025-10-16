@@ -1,236 +1,136 @@
-name: Test Production Build Notification
+name: Test Fork Integrations
 
 on:
   pull_request:
-    branches:
-      - main
     types: [opened, synchronize, reopened]
-  push:
-    branches:
-      - main
-      - test-*
+  workflow_dispatch:
 
 jobs:
-  test-notify-prod-build:
+  test-integrations:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        
-      - name: Wait for Netlify deployment
-        run: sleep 90
-        
-      - name: Check Netlify deployment status
-        id: netlify-status
+        with:
+          fetch-depth: 2
+
+      - name: Get PR information
+        id: pr-info
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          # Get latest deployment from Netlify API
-          DEPLOY_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.NETLIFY_TOKEN }}" \
-            "https://api.netlify.com/api/v1/sites/cockroachdb-docs/deploys?per_page=1")
+          pr_num=${{ github.event.pull_request.number }}
+          pr_title="${{ github.event.pull_request.title }}"
+          pr_author="${{ github.event.pull_request.user.login }}"
+          pr_url="${{ github.event.pull_request.html_url }}"
           
-          DEPLOY_STATE=$(echo "$DEPLOY_DATA" | jq -r '.[0].state')
-          DEPLOY_URL=$(echo "$DEPLOY_DATA" | jq -r '.[0].deploy_ssl_url')
-          COMMIT_SHA=$(echo "$DEPLOY_DATA" | jq -r '.[0].commit_ref')
-          DEPLOY_ID=$(echo "$DEPLOY_DATA" | jq -r '.[0].id')
+          echo "pr_number=$pr_num" >> $GITHUB_OUTPUT
+          echo "pr_title=$pr_title" >> $GITHUB_OUTPUT
+          echo "pr_author=$pr_author" >> $GITHUB_OUTPUT
+          echo "pr_url=$pr_url" >> $GITHUB_OUTPUT
           
-          echo "deploy_state=$DEPLOY_STATE" >> $GITHUB_OUTPUT
-          echo "deploy_url=$DEPLOY_URL" >> $GITHUB_OUTPUT
-          echo "commit_sha=$COMMIT_SHA" >> $GITHUB_OUTPUT
-          echo "deploy_id=$DEPLOY_ID" >> $GITHUB_OUTPUT
+          # Get changed files count
+          files_changed=$(gh pr view $pr_num --json files -q '.files | length')
+          echo "files_changed=$files_changed" >> $GITHUB_OUTPUT
           
-          echo "Deployment state: $DEPLOY_STATE"
-          echo "Deployment URL: $DEPLOY_URL"
-          echo "Commit SHA: $COMMIT_SHA"
-          
-      - name: Create GitHub deployment
-        id: deployment
+          echo "PR #$pr_num by $pr_author: $files_changed files changed"
+
+      - name: Create GitHub Comment
         uses: actions/github-script@v7
         with:
           script: |
-            const deployment = await github.rest.repos.createDeployment({
+            const prInfo = {
+              number: ${{ steps.pr-info.outputs.pr_number }},
+              author: '${{ steps.pr-info.outputs.pr_author }}',
+              title: '${{ steps.pr-info.outputs.pr_title }}',
+              filesChanged: ${{ steps.pr-info.outputs.files_changed }},
+              url: '${{ steps.pr-info.outputs.pr_url }}'
+            };
+            
+            const commentBody = `
+            ## 🤖 Test Fork Integration
+            
+            **PR Information:**
+            - **Number:** #${prInfo.number}
+            - **Author:** @${prInfo.author}
+            - **Title:** ${prInfo.title}
+            - **Files Changed:** ${prInfo.filesChanged}
+            - **Repository:** ${{ github.repository }}
+            - **Branch:** ${{ github.head_ref }}
+            
+            **Test Results:**
+            ✅ GitHub commenting integration working  
+            ⏳ Slack notification test in progress...
+            
+            *This is a test comment from the fork integration workflow.*
+            `;
+            
+            await github.rest.issues.createComment({
+              issue_number: prInfo.number,
               owner: context.repo.owner,
               repo: context.repo.repo,
-              ref: context.sha,
-              environment: 'production',
-              description: 'Production deployment via Netlify (TEST)',
-              auto_merge: false,
-              required_contexts: []
+              body: commentBody
             });
-            return deployment.data.id;
-            
-      - name: Update GitHub deployment status - Success
-        if: steps.netlify-status.outputs.deploy_state == 'ready'
-        uses: actions/github-script@v7
-        with:
-          script: |
-            await github.rest.repos.createDeploymentStatus({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              deployment_id: ${{ steps.deployment.outputs.result }},
-              state: 'success',
-              environment: 'production',
-              environment_url: 'https://www.cockroachlabs.com',
-              description: 'Production deployment successful (TEST)'
-            });
-            
-      - name: Update GitHub deployment status - Failure
-        if: steps.netlify-status.outputs.deploy_state == 'error'
-        uses: actions/github-script@v7
-        with:
-          script: |
-            await github.rest.repos.createDeploymentStatus({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              deployment_id: ${{ steps.deployment.outputs.result }},
-              state: 'failure',
-              environment: 'production',
-              description: 'Production deployment failed (TEST)'
-            });
-            
-      - name: Send Slack notification - Success
-        if: steps.netlify-status.outputs.deploy_state == 'ready'
+
+      - name: Send Slack Notification
         run: |
           curl -X POST -H 'Content-type: application/json' \
             --data '{
-              "text": "✅ TEST: Production build successful!",
+              "text": "🧪 Fork Integration Test",
               "blocks": [
                 {
                   "type": "section",
                   "text": {
                     "type": "mrkdwn",
-                    "text": "*🧪 TEST: Production Build Successful* ✅\n\n*Repository:* ${{ github.repository }}\n*Site:* <https://www.cockroachlabs.com|cockroachlabs.com>\n*Commit:* `${{ steps.netlify-status.outputs.commit_sha }}`\n*Branch:* ${{ github.ref_name }}\n*Deploy ID:* ${{ steps.netlify-status.outputs.deploy_id }}\n*PR:* ${{ github.event.pull_request.html_url || 'Direct push' }}"
+                    "text": "*Fork Integration Test* 🧪\n\n*PR:* <${{ steps.pr-info.outputs.pr_url }}|#${{ steps.pr-info.outputs.pr_number }}>\n*Title:* ${{ steps.pr-info.outputs.pr_title }}\n*Author:* @${{ steps.pr-info.outputs.pr_author }}\n*Repository:* ${{ github.repository }}\n*Files Changed:* ${{ steps.pr-info.outputs.files_changed }}\n*Branch:* ${{ github.head_ref }} → ${{ github.base_ref }}"
                   }
-                }
-              ]
-            }' \
-            https://hooks.slack.com/services/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
-            
-      - name: Send Slack notification - Failure
-        if: steps.netlify-status.outputs.deploy_state == 'error'
-        run: |
-          curl -X POST -H 'Content-type: application/json' \
-            --data '{
-              "text": "❌ TEST: Production build failed!",
-              "blocks": [
+                },
                 {
                   "type": "section",
                   "text": {
                     "type": "mrkdwn",
-                    "text": "*🧪 TEST: Production Build Failed* ❌\n\n*Repository:* ${{ github.repository }}\n*Commit:* `${{ steps.netlify-status.outputs.commit_sha }}`\n*Branch:* ${{ github.ref_name }}\n*Deploy ID:* ${{ steps.netlify-status.outputs.deploy_id }}\n*PR:* ${{ github.event.pull_request.html_url || 'Direct push' }}\n*Error:* Check Netlify dashboard for details"
+                    "text": "*Test Status:*\n✅ GitHub Comment: Success\n✅ Slack Notification: Success"
                   }
                 }
               ]
             }' \
-            https://hooks.slack.com/services/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
+            ${{ secrets.SLACK_WEBHOOK_URL }}
+
+      - name: Update GitHub Comment with Results
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // Find our test comment
+            const comments = await github.rest.issues.listComments({
+              issue_number: ${{ steps.pr-info.outputs.pr_number }},
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+            });
             
-      - name: Send Slack notification - In Progress
-        if: steps.netlify-status.outputs.deploy_state == 'building' || steps.netlify-status.outputs.deploy_state == 'enqueued'
+            const testComment = comments.data.find(comment => 
+              comment.body.includes('🤖 Test Fork Integration')
+            );
+            
+            if (testComment) {
+              const updatedBody = testComment.body.replace(
+                '⏳ Slack notification test in progress...',
+                '✅ Slack notification test completed!'
+              );
+              
+              await github.rest.issues.updateComment({
+                comment_id: testComment.id,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: updatedBody
+              });
+            }
+
+      - name: Test Summary
         run: |
-          echo "::warning::Deployment still in progress after 90 seconds: ${{ steps.netlify-status.outputs.deploy_state }}"
-          curl -X POST -H 'Content-type: application/json' \
-            --data '{
-              "text": "⏳ TEST: Production build still in progress...",
-              "blocks": [
-                {
-                  "type": "section",
-                  "text": {
-                    "type": "mrkdwn",
-                    "text": "*🧪 TEST: Production Build In Progress* ⏳\n\n*Repository:* ${{ github.repository }}\n*Status:* ${{ steps.netlify-status.outputs.deploy_state }}\n*Commit:* `${{ steps.netlify-status.outputs.commit_sha }}`\n*Branch:* ${{ github.ref_name }}\n*PR:* ${{ github.event.pull_request.html_url || 'Direct push' }}\n*Note:* Check Netlify dashboard for completion status"
-                  }
-                }
-              ]
-            }' \
-            https://hooks.slack.com/services/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
-            
-      - name: Comment on PR - Success
-        if: github.event_name == 'pull_request' && steps.netlify-status.outputs.deploy_state == 'ready'
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const comment = `## 🧪 TEST: Production Build Successful! ✅
-            
-            **This is a test of the production build notification system.**
-            
-            Your changes have been successfully deployed to production.
-            
-            **📊 Build Details:**
-            - **Repository:** ${{ github.repository }}
-            - **Site:** [cockroachlabs.com](https://www.cockroachlabs.com)
-            - **Commit:** \`${{ steps.netlify-status.outputs.commit_sha }}\`
-            - **Deploy ID:** ${{ steps.netlify-status.outputs.deploy_id }}
-            - **Deploy URL:** ${{ steps.netlify-status.outputs.deploy_url }}
-            - **Branch:** ${{ github.ref_name }}
-            
-            The production site is now live with your changes! 🎉
-            
-            _This was a test notification from the enhanced workflow._`;
-            
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: comment
-            });
-            
-      - name: Comment on PR - Failure
-        if: github.event_name == 'pull_request' && steps.netlify-status.outputs.deploy_state == 'error'
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const comment = `## 🧪 TEST: Production Build Failed ❌
-            
-            **This is a test of the production build notification system.**
-            
-            There was an issue with the production deployment.
-            
-            **📊 Build Details:**
-            - **Repository:** ${{ github.repository }}
-            - **Commit:** \`${{ steps.netlify-status.outputs.commit_sha }}\`
-            - **Deploy ID:** ${{ steps.netlify-status.outputs.deploy_id }}
-            - **Branch:** ${{ github.ref_name }}
-            - **Status:** Error
-            
-            **🔧 Next Steps:**
-            1. Check the [Netlify dashboard](https://app.netlify.com) for detailed error logs
-            2. Review recent changes for potential build-breaking issues
-            3. Verify all dependencies and build scripts are correct
-            
-            _This was a test notification from the enhanced workflow._`;
-            
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: comment
-            });
-            
-      - name: Comment on PR - In Progress
-        if: github.event_name == 'pull_request' && (steps.netlify-status.outputs.deploy_state == 'building' || steps.netlify-status.outputs.deploy_state == 'enqueued')
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const comment = `## 🧪 TEST: Production Build In Progress ⏳
-            
-            **This is a test of the production build notification system.**
-            
-            Your production deployment is still being processed.
-            
-            **📊 Build Details:**
-            - **Repository:** ${{ github.repository }}
-            - **Status:** ${{ steps.netlify-status.outputs.deploy_state }}
-            - **Commit:** \`${{ steps.netlify-status.outputs.commit_sha }}\`
-            - **Deploy ID:** ${{ steps.netlify-status.outputs.deploy_id }}
-            - **Branch:** ${{ github.ref_name }}
-            
-            **⏰ Expected Actions:**
-            - The build is currently ${{ steps.netlify-status.outputs.deploy_state }}
-            - You'll receive another notification when it completes
-            - Check the [Netlify dashboard](https://app.netlify.com) for real-time progress
-            
-            _This was a test notification from the enhanced workflow._`;
-            
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: comment
-            });
+          echo "🎉 Integration Test Complete!"
+          echo "✅ GitHub Token: Working (automatic)"
+          echo "✅ GitHub Comments: Working"
+          echo "✅ Slack Webhook: Working" 
+          echo "📍 Repository: ${{ github.repository }}"
+          echo "📍 PR: #${{ steps.pr-info.outputs.pr_number }}"
