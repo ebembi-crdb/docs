@@ -163,23 +163,25 @@ jobs:
           script: |
             const prInfo = ${{ steps.find-pr.outputs.result }};
             if (prInfo) {
+              const commentBody = `## 🧪 Test Production Deployment Successful!
+
+            **✅ Your changes would be live on production (this is a test)**
+
+            **Test Deployment Details:**
+            - **PR:** #${prInfo.number} - ${prInfo.title}
+            - **Author:** @${prInfo.author}
+            - **Commit:** \`${{ steps.netlify-status.outputs.commit_sha }}\`
+            - **Deploy ID:** ${{ steps.netlify-status.outputs.deploy_id }}
+            - **Test Deploy URL:** ${{ steps.netlify-status.outputs.deploy_url }}
+            - **Repository:** ${{ github.repository }}
+
+            *🧪 This is a test of the production deployment workflow - no actual production deployment occurred.*`;
+            
               await github.rest.issues.createComment({
                 issue_number: prInfo.number,
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                body: `## 🧪 Test Production Deployment Successful!
-
-**✅ Your changes would be live on production (this is a test)**
-
-**Test Deployment Details:**
-- **PR:** #${prInfo.number} - ${prInfo.title}
-- **Author:** @${prInfo.author}
-- **Commit:** \`${{ steps.netlify-status.outputs.commit_sha }}\`
-- **Deploy ID:** ${{ steps.netlify-status.outputs.deploy_id }}
-- **Test Deploy URL:** ${{ steps.netlify-status.outputs.deploy_url }}
-- **Repository:** ${{ github.repository }}
-
-*🧪 This is a test of the production deployment workflow - no actual production deployment occurred.*`
+                body: commentBody
               });
             }
             
@@ -208,28 +210,30 @@ jobs:
           script: |
             const prInfo = ${{ steps.find-pr.outputs.result }};
             if (prInfo) {
+              const commentBody = `## ❌ Test Production Deployment Failed
+
+            **🚨 Simulated deployment failure (this is a test)**
+
+            **Test Deployment Details:**
+            - **PR:** #${prInfo.number} - ${prInfo.title}
+            - **Author:** @${prInfo.author}
+            - **Commit:** \`${{ steps.netlify-status.outputs.commit_sha }}\`
+            - **Deploy ID:** ${{ steps.netlify-status.outputs.deploy_id }}
+            - **Status:** Failed (simulated)
+            - **Repository:** ${{ github.repository }}
+
+            **Next Steps:**
+            - This was a test failure simulation
+            - In production, you would check Netlify dashboard for error details
+            - Contact the docs team if you need assistance
+
+            *🧪 This is a test of the production deployment workflow - no actual production deployment occurred.*`;
+            
               await github.rest.issues.createComment({
                 issue_number: prInfo.number,
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                body: `## ❌ Test Production Deployment Failed
-
-**🚨 Simulated deployment failure (this is a test)**
-
-**Test Deployment Details:**
-- **PR:** #${prInfo.number} - ${prInfo.title}
-- **Author:** @${prInfo.author}
-- **Commit:** \`${{ steps.netlify-status.outputs.commit_sha }}\`
-- **Deploy ID:** ${{ steps.netlify-status.outputs.deploy_id }}
-- **Status:** Failed (simulated)
-- **Repository:** ${{ github.repository }}
-
-**Next Steps:**
-- This was a test failure simulation
-- In production, you would check Netlify dashboard for error details
-- Contact the docs team if you need assistance
-
-*🧪 This is a test of the production deployment workflow - no actual production deployment occurred.*`
+                body: commentBody
               });
             }
             
@@ -259,25 +263,27 @@ jobs:
           script: |
             const prInfo = ${{ steps.find-pr.outputs.result }};
             if (prInfo) {
+              const commentBody = `## ⏳ Test Production Deployment In Progress
+
+            **🔄 Simulated deployment in progress (this is a test)**
+
+            **Test Deployment Details:**
+            - **PR:** #${prInfo.number} - ${prInfo.title}
+            - **Author:** @${prInfo.author}
+            - **Commit:** \`${{ steps.netlify-status.outputs.commit_sha }}\`
+            - **Deploy ID:** ${{ steps.netlify-status.outputs.deploy_id }}
+            - **Status:** ${{ steps.netlify-status.outputs.deploy_state }} (simulated)
+            - **Repository:** ${{ github.repository }}
+
+            **Note:** This is a test simulation of a deployment taking longer than expected.
+
+            *🧪 This is a test of the production deployment workflow - no actual production deployment occurred.*`;
+            
               await github.rest.issues.createComment({
                 issue_number: prInfo.number,
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                body: `## ⏳ Test Production Deployment In Progress
-
-**🔄 Simulated deployment in progress (this is a test)**
-
-**Test Deployment Details:**
-- **PR:** #${prInfo.number} - ${prInfo.title}
-- **Author:** @${prInfo.author}
-- **Commit:** \`${{ steps.netlify-status.outputs.commit_sha }}\`
-- **Deploy ID:** ${{ steps.netlify-status.outputs.deploy_id }}
-- **Status:** ${{ steps.netlify-status.outputs.deploy_state }} (simulated)
-- **Repository:** ${{ github.repository }}
-
-**Note:** This is a test simulation of a deployment taking longer than expected.
-
-*🧪 This is a test of the production deployment workflow - no actual production deployment occurred.*`
+                body: commentBody
               });
             }
 
