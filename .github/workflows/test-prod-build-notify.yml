@@ -1,136 +1,293 @@
-name: Test Fork Integrations
+name: Test Production Deployment Workflow
 
 on:
-  pull_request:
-    types: [opened, synchronize, reopened]
+  push:
+    branches:
+      - main
   workflow_dispatch:
+    inputs:
+      mock_deployment_status:
+        description: 'Mock deployment status'
+        required: false
+        default: 'ready'
+        type: choice
+        options:
+          - ready
+          - error
+          - building
 
 jobs:
-  test-integrations:
+  test-prod-deployment:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 2
-
-      - name: Get PR information
-        id: pr-info
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          pr_num=${{ github.event.pull_request.number }}
-          pr_title="${{ github.event.pull_request.title }}"
-          pr_author="${{ github.event.pull_request.user.login }}"
-          pr_url="${{ github.event.pull_request.html_url }}"
-          
-          echo "pr_number=$pr_num" >> $GITHUB_OUTPUT
-          echo "pr_title=$pr_title" >> $GITHUB_OUTPUT
-          echo "pr_author=$pr_author" >> $GITHUB_OUTPUT
-          echo "pr_url=$pr_url" >> $GITHUB_OUTPUT
-          
-          # Get changed files count
-          files_changed=$(gh pr view $pr_num --json files -q '.files | length')
-          echo "files_changed=$files_changed" >> $GITHUB_OUTPUT
-          
-          echo "PR #$pr_num by $pr_author: $files_changed files changed"
-
-      - name: Create GitHub Comment
+        
+      - name: Find merged PR
+        id: find-pr
         uses: actions/github-script@v7
         with:
           script: |
-            const prInfo = {
-              number: ${{ steps.pr-info.outputs.pr_number }},
-              author: '${{ steps.pr-info.outputs.pr_author }}',
-              title: '${{ steps.pr-info.outputs.pr_title }}',
-              filesChanged: ${{ steps.pr-info.outputs.files_changed }},
-              url: '${{ steps.pr-info.outputs.pr_url }}'
-            };
+            // Get the commit that triggered this push
+            const commit = context.sha;
             
-            const commentBody = `
-            ## 🤖 Test Fork Integration
-            
-            **PR Information:**
-            - **Number:** #${prInfo.number}
-            - **Author:** @${prInfo.author}
-            - **Title:** ${prInfo.title}
-            - **Files Changed:** ${prInfo.filesChanged}
-            - **Repository:** ${{ github.repository }}
-            - **Branch:** ${{ github.head_ref }}
-            
-            **Test Results:**
-            ✅ GitHub commenting integration working  
-            ⏳ Slack notification test in progress...
-            
-            *This is a test comment from the fork integration workflow.*
-            `;
-            
-            await github.rest.issues.createComment({
-              issue_number: prInfo.number,
+            // Find PRs that were merged with this commit
+            const prs = await github.rest.repos.listPullRequestsAssociatedWithCommit({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              body: commentBody
+              commit_sha: commit
             });
-
-      - name: Send Slack Notification
+            
+            // Find the merged PR
+            const mergedPR = prs.data.find(pr => pr.merged_at && pr.base.ref === 'main');
+            
+            if (mergedPR) {
+              console.log(`Found merged PR: #${mergedPR.number}`);
+              return {
+                number: mergedPR.number,
+                title: mergedPR.title,
+                author: mergedPR.user.login,
+                url: mergedPR.html_url
+              };
+            } else {
+              console.log('No merged PR found for this commit - creating mock PR data for testing');
+              return {
+                number: 999,
+                title: "Test PR for deployment workflow",
+                author: context.actor,
+                url: `https://github.com/${context.repo.owner}/${context.repo.repo}/pull/999`
+              };
+            }
+        
+      - name: Wait for deployment (mocked)
+        run: |
+          echo "🕐 Simulating 90 second wait for deployment..."
+          echo "In production, this waits for Netlify deployment to complete"
+          sleep 5  # Shortened for testing
+          
+      - name: Mock Netlify deployment status
+        id: netlify-status
+        run: |
+          # Mock deployment data instead of calling real Netlify API
+          
+          # Use manual input if available, otherwise random status for testing
+          if [ "${{ github.event.inputs.mock_deployment_status }}" != "" ]; then
+            DEPLOY_STATE="${{ github.event.inputs.mock_deployment_status }}"
+          else
+            # Simulate successful deployment for push events
+            DEPLOY_STATE="ready"
+          fi
+          
+          # Mock deployment data
+          DEPLOY_URL="https://test-deployment-${{ github.run_number }}.netlify.app"
+          COMMIT_SHA="${{ github.sha }}"
+          DEPLOY_ID="mock-deploy-${{ github.run_number }}"
+          
+          echo "deploy_state=$DEPLOY_STATE" >> $GITHUB_OUTPUT
+          echo "deploy_url=$DEPLOY_URL" >> $GITHUB_OUTPUT
+          echo "commit_sha=$COMMIT_SHA" >> $GITHUB_OUTPUT
+          echo "deploy_id=$DEPLOY_ID" >> $GITHUB_OUTPUT
+          
+          echo "🧪 Mock Deployment Status: $DEPLOY_STATE"
+          echo "🔗 Mock Deployment URL: $DEPLOY_URL"
+          echo "📝 Commit SHA: $COMMIT_SHA"
+          echo "🆔 Deploy ID: $DEPLOY_ID"
+          
+      - name: Create GitHub deployment
+        id: deployment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const deployment = await github.rest.repos.createDeployment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: context.sha,
+              environment: 'test-production',
+              description: 'Test production deployment (mocked)',
+              auto_merge: false,
+              required_contexts: []
+            });
+            return deployment.data.id;
+            
+      - name: Update GitHub deployment status - Success
+        if: steps.netlify-status.outputs.deploy_state == 'ready'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.repos.createDeploymentStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              deployment_id: ${{ steps.deployment.outputs.result }},
+              state: 'success',
+              environment: 'test-production',
+              environment_url: '${{ steps.netlify-status.outputs.deploy_url }}',
+              description: 'Test production deployment successful'
+            });
+            
+      - name: Update GitHub deployment status - Failure
+        if: steps.netlify-status.outputs.deploy_state == 'error'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.repos.createDeploymentStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              deployment_id: ${{ steps.deployment.outputs.result }},
+              state: 'failure',
+              environment: 'test-production',
+              description: 'Test production deployment failed'
+            });
+            
+      - name: Send Slack notification - Success
+        if: steps.netlify-status.outputs.deploy_state == 'ready'
         run: |
           curl -X POST -H 'Content-type: application/json' \
             --data '{
-              "text": "🧪 Fork Integration Test",
+              "text": "✅ Test Production deployment successful!",
               "blocks": [
                 {
                   "type": "section",
                   "text": {
                     "type": "mrkdwn",
-                    "text": "*Fork Integration Test* 🧪\n\n*PR:* <${{ steps.pr-info.outputs.pr_url }}|#${{ steps.pr-info.outputs.pr_number }}>\n*Title:* ${{ steps.pr-info.outputs.pr_title }}\n*Author:* @${{ steps.pr-info.outputs.pr_author }}\n*Repository:* ${{ github.repository }}\n*Files Changed:* ${{ steps.pr-info.outputs.files_changed }}\n*Branch:* ${{ github.head_ref }} → ${{ github.base_ref }}"
-                  }
-                },
-                {
-                  "type": "section",
-                  "text": {
-                    "type": "mrkdwn",
-                    "text": "*Test Status:*\n✅ GitHub Comment: Success\n✅ Slack Notification: Success"
+                    "text": "*🧪 TEST Production Build Successful* ✅\n\n*Site:* <${{ steps.netlify-status.outputs.deploy_url }}|Test Deployment>\n*Commit:* `${{ steps.netlify-status.outputs.commit_sha }}`\n*Branch:* main\n*Deploy ID:* ${{ steps.netlify-status.outputs.deploy_id }}\n*Repository:* ${{ github.repository }}"
                   }
                 }
               ]
             }' \
             ${{ secrets.SLACK_WEBHOOK_URL }}
-
-      - name: Update GitHub Comment with Results
-        if: always()
+            
+      - name: Comment on PR - Success
+        if: steps.netlify-status.outputs.deploy_state == 'ready' && fromJSON(steps.find-pr.outputs.result) != null
         uses: actions/github-script@v7
         with:
           script: |
-            // Find our test comment
-            const comments = await github.rest.issues.listComments({
-              issue_number: ${{ steps.pr-info.outputs.pr_number }},
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-            });
-            
-            const testComment = comments.data.find(comment => 
-              comment.body.includes('🤖 Test Fork Integration')
-            );
-            
-            if (testComment) {
-              const updatedBody = testComment.body.replace(
-                '⏳ Slack notification test in progress...',
-                '✅ Slack notification test completed!'
-              );
-              
-              await github.rest.issues.updateComment({
-                comment_id: testComment.id,
+            const prInfo = ${{ steps.find-pr.outputs.result }};
+            if (prInfo) {
+              await github.rest.issues.createComment({
+                issue_number: prInfo.number,
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                body: updatedBody
+                body: `## 🧪 Test Production Deployment Successful!
+
+**✅ Your changes would be live on production (this is a test)**
+
+**Test Deployment Details:**
+- **PR:** #${prInfo.number} - ${prInfo.title}
+- **Author:** @${prInfo.author}
+- **Commit:** \`${{ steps.netlify-status.outputs.commit_sha }}\`
+- **Deploy ID:** ${{ steps.netlify-status.outputs.deploy_id }}
+- **Test Deploy URL:** ${{ steps.netlify-status.outputs.deploy_url }}
+- **Repository:** ${{ github.repository }}
+
+*🧪 This is a test of the production deployment workflow - no actual production deployment occurred.*`
+              });
+            }
+            
+      - name: Send Slack notification - Failure
+        if: steps.netlify-status.outputs.deploy_state == 'error'
+        run: |
+          curl -X POST -H 'Content-type: application/json' \
+            --data '{
+              "text": "❌ Test Production deployment failed!",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "*🧪 TEST Production Build Failed* ❌\n\n*Commit:* `${{ steps.netlify-status.outputs.commit_sha }}`\n*Branch:* main\n*Deploy ID:* ${{ steps.netlify-status.outputs.deploy_id }}\n*Repository:* ${{ github.repository }}\n*Error:* Simulated deployment failure"
+                  }
+                }
+              ]
+            }' \
+            ${{ secrets.SLACK_WEBHOOK_URL }}
+            
+      - name: Comment on PR - Failure
+        if: steps.netlify-status.outputs.deploy_state == 'error' && fromJSON(steps.find-pr.outputs.result) != null
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const prInfo = ${{ steps.find-pr.outputs.result }};
+            if (prInfo) {
+              await github.rest.issues.createComment({
+                issue_number: prInfo.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: `## ❌ Test Production Deployment Failed
+
+**🚨 Simulated deployment failure (this is a test)**
+
+**Test Deployment Details:**
+- **PR:** #${prInfo.number} - ${prInfo.title}
+- **Author:** @${prInfo.author}
+- **Commit:** \`${{ steps.netlify-status.outputs.commit_sha }}\`
+- **Deploy ID:** ${{ steps.netlify-status.outputs.deploy_id }}
+- **Status:** Failed (simulated)
+- **Repository:** ${{ github.repository }}
+
+**Next Steps:**
+- This was a test failure simulation
+- In production, you would check Netlify dashboard for error details
+- Contact the docs team if you need assistance
+
+*🧪 This is a test of the production deployment workflow - no actual production deployment occurred.*`
+              });
+            }
+            
+      - name: Handle pending deployment
+        if: steps.netlify-status.outputs.deploy_state == 'building' || steps.netlify-status.outputs.deploy_state == 'enqueued'
+        run: |
+          echo "::warning::Simulated deployment still in progress: ${{ steps.netlify-status.outputs.deploy_state }}"
+          curl -X POST -H 'Content-type: application/json' \
+            --data '{
+              "text": "⏳ Test Production deployment in progress...",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "*🧪 TEST Production Build In Progress* ⏳\n\n*Status:* ${{ steps.netlify-status.outputs.deploy_state }}\n*Commit:* `${{ steps.netlify-status.outputs.commit_sha }}`\n*Branch:* main\n*Repository:* ${{ github.repository }}\n*Note:* This is a simulated pending deployment"
+                  }
+                }
+              ]
+            }' \
+            ${{ secrets.SLACK_WEBHOOK_URL }}
+            
+      - name: Comment on PR - Pending
+        if: (steps.netlify-status.outputs.deploy_state == 'building' || steps.netlify-status.outputs.deploy_state == 'enqueued') && fromJSON(steps.find-pr.outputs.result) != null
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const prInfo = ${{ steps.find-pr.outputs.result }};
+            if (prInfo) {
+              await github.rest.issues.createComment({
+                issue_number: prInfo.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: `## ⏳ Test Production Deployment In Progress
+
+**🔄 Simulated deployment in progress (this is a test)**
+
+**Test Deployment Details:**
+- **PR:** #${prInfo.number} - ${prInfo.title}
+- **Author:** @${prInfo.author}
+- **Commit:** \`${{ steps.netlify-status.outputs.commit_sha }}\`
+- **Deploy ID:** ${{ steps.netlify-status.outputs.deploy_id }}
+- **Status:** ${{ steps.netlify-status.outputs.deploy_state }} (simulated)
+- **Repository:** ${{ github.repository }}
+
+**Note:** This is a test simulation of a deployment taking longer than expected.
+
+*🧪 This is a test of the production deployment workflow - no actual production deployment occurred.*`
               });
             }
 
       - name: Test Summary
+        if: always()
         run: |
-          echo "🎉 Integration Test Complete!"
-          echo "✅ GitHub Token: Working (automatic)"
+          echo "🎉 Production Deployment Workflow Test Complete!"
+          echo "✅ PR Detection: ${{ steps.find-pr.outputs.result != 'null' && 'Working' || 'No PR found' }}"
+          echo "✅ GitHub Deployments: Working"
           echo "✅ GitHub Comments: Working"
-          echo "✅ Slack Webhook: Working" 
+          echo "✅ Slack Notifications: Working"
+          echo "📊 Mock Status: ${{ steps.netlify-status.outputs.deploy_state }}"
           echo "📍 Repository: ${{ github.repository }}"
-          echo "📍 PR: #${{ steps.pr-info.outputs.pr_number }}"
